@@ -1,0 +1,13 @@
+---
+- name: Развернуть стенд надёжности
+  hosts: stand
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: base
+      tags: [base]
+    - role: docker
+      tags: [docker]
+    - role: stand
+      tags: [stand]

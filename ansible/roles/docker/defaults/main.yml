@@ -1,0 +1,10 @@
+---
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-compose-plugin
+
+# Архитектура для apt-репозитория: ansible_architecture даёт x86_64,
+# а Debian ждёт amd64.
+docker_apt_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}"

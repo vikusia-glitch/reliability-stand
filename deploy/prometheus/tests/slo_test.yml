@@ -1,0 +1,119 @@
+# Тесты правил SLO: promtool test rules deploy/prometheus/tests/slo_test.yml
+#
+# Алерты — тоже код, и ошибка в них дороже ошибки в сервисе: сломанное
+# правило не падает, оно молчит. Поэтому проверяем не только что алерт
+# срабатывает на аварии, но и что он молчит на здоровом трафике и на
+# пустом трафике.
+
+rule_files:
+  - ../rules/slo.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------- авария: 16.7% ошибок ----------
+  - interval: 1m
+    name: "быстрый алерт срабатывает при 16.7% ошибок"
+    input_series:
+      - series: 'stand_requests_total{endpoint="/work",code="200"}'
+        values: "0+60x180"
+      - series: 'stand_requests_total{endpoint="/work",code="500"}'
+        values: "0+12x180"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: StandErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: availability
+            exp_annotations:
+              summary: "Быстрое сгорание бюджета ошибок на /work"
+              runbook: "runbooks/error-budget-fast-burn.md"
+
+  # ---------- здоровый трафик: 0.5% ошибок ----------
+  - interval: 1m
+    name: "на здоровом трафике не срабатывает ничего"
+    input_series:
+      - series: 'stand_requests_total{endpoint="/work",code="200"}'
+        values: "0+1194x180"
+      - series: 'stand_requests_total{endpoint="/work",code="500"}'
+        values: "0+6x180"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: StandErrorBudgetFastBurn
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: StandErrorBudgetSlowBurn
+        exp_alerts: []
+
+  # ---------- нет трафика ----------
+  # Без защиты знаменателя здесь было бы деление на ноль и алерт
+  # молчал бы по неверной причине. Проверяем, что молчит осознанно.
+  - interval: 1m
+    name: "при нулевом трафике алерт не срабатывает"
+    input_series:
+      - series: 'stand_requests_total{endpoint="/work",code="200"}'
+        values: "0+0x180"
+      - series: 'stand_requests_total{endpoint="/work",code="500"}'
+        values: "0+0x180"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: StandErrorBudgetFastBurn
+        exp_alerts: []
+
+  # ---------- медленное сгорание: 9% ошибок ----------
+  - interval: 1m
+    name: "медленный алерт ловит 9% ошибок"
+    input_series:
+      - series: 'stand_requests_total{endpoint="/work",code="200"}'
+        values: "0+1092x600"
+      - series: 'stand_requests_total{endpoint="/work",code="500"}'
+        values: "0+108x600"
+    alert_rule_test:
+      - eval_time: 400m
+        alertname: StandErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: availability
+            exp_annotations:
+              summary: "Медленное сгорание бюджета ошибок на /work"
+              runbook: "runbooks/error-budget-slow-burn.md"
+
+  # ---------- задержка: 20% ответов медленнее 300 мс ----------
+  - interval: 1m
+    name: "алерт по задержке срабатывает при 20% медленных ответов"
+    input_series:
+      - series: 'stand_request_duration_seconds_bucket{endpoint="/work",le="0.3"}'
+        values: "0+48x180"
+      - series: 'stand_request_duration_seconds_bucket{endpoint="/work",le="+Inf"}'
+        values: "0+60x180"
+      - series: 'stand_request_duration_seconds_count{endpoint="/work"}'
+        values: "0+60x180"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: StandLatencyBudgetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: latency
+            exp_annotations:
+              summary: "Слишком много ответов /work медленнее 300 мс"
+              runbook: "runbooks/latency-budget-burn.md"
+
+  # ---------- пропажа метрик ----------
+  - interval: 1m
+    name: "StandDown срабатывает, когда цель недоступна"
+    input_series:
+      - series: 'up{job="stand"}'
+        values: "1 1 1 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StandDown
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: stand
+            exp_annotations:
+              summary: "Prometheus не собирает метрики со стенда"
+              runbook: "runbooks/stand-down.md"

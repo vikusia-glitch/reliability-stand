@@ -1,0 +1,124 @@
+name: stand
+
+services:
+  stand:
+    build:
+      context: ../service
+    image: reliability-stand:local
+    container_name: stand-app
+    restart: unless-stopped
+    healthcheck:
+      # Нужен для `docker compose up --wait` и для проверки живости
+      # из Ansible: без него compose считает контейнер готовым сразу
+      # после старта процесса, а не после готовности сервиса.
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    ports:
+      # Порты вынесены в .env: 8000, 9090 и особенно 3000 заняты
+      # на чужой машине чаще, чем свободны.
+      - "${STAND_PORT:-8000}:8000"
+    networks: [stand]
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: stand-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prom-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks: [stand]
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: stand-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks: [stand]
+    depends_on: [prometheus]
+
+  # --- инструменты, поднимаются только по профилю ---
+  # Позволяют работать с репозиторием, ничего не ставя на машину:
+  # на хосте нужен только Docker.
+  #
+  #   docker compose --profile tools run --rm toolbox            # оболочка
+  #   docker compose --profile tools run --rm tests              # тесты
+  #   docker compose --profile tools run --rm check-rules        # алерты
+  #   docker compose --profile tools run --rm loadgen            # нагрузка
+  #
+  # Внутри toolbox нельзя запускать сам compose: бинды в этом файле
+  # заданы относительно каталога репозитория на ХОСТЕ, а демон их так
+  # и разрешит. Поднимать и гасить стенд — с хоста.
+  toolbox:
+    profiles: ["tools"]
+    build: &tools_build
+      context: ..
+      dockerfile: tools/Dockerfile
+    image: reliability-stand-tools:local
+    volumes:
+      - ..:/work
+    working_dir: /work
+    networks: [stand]
+
+  tests:
+    profiles: ["tools"]
+    build: *tools_build
+    image: reliability-stand-tools:local
+    volumes:
+      - ../service:/work
+    working_dir: /work
+    command: ["python", "-m", "pytest", "tests", "-q"]
+    networks: [stand]
+
+  check-rules:
+    profiles: ["tools"]
+    build: *tools_build
+    image: reliability-stand-tools:local
+    volumes:
+      - ./prometheus:/work
+    working_dir: /work/tests
+    entrypoint: ["sh", "-c"]
+    command:
+      - "promtool check rules /work/rules/slo.yml && promtool test rules slo_test.yml"
+    networks: [stand]
+
+  loadgen:
+    profiles: ["tools"]
+    build: *tools_build
+    image: reliability-stand-tools:local
+    volumes:
+      - ../loadgen:/work
+    working_dir: /work
+    # Внутри сети compose сервис зовётся stand, а не 127.0.0.1.
+    entrypoint: ["python", "loadgen.py", "--url", "http://stand:8000/work"]
+    command: ["--rps", "20", "--duration", "600"]
+    depends_on:
+      stand:
+        condition: service_healthy
+    networks: [stand]
+
+networks:
+  stand:
+
+volumes:
+  prom-data:
+  grafana-data:

@@ -1,0 +1,47 @@
+---
+- name: Создать каталог стенда
+  ansible.builtin.file:
+    path: "{{ stand_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# playbook_dir, а не относительный путь: относительный src в роли
+# ищется в roles/stand/files/, а исходники лежат в корне репозитория.
+- name: Скопировать исходники и конфигурацию
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../{{ item }}"
+    dest: "{{ stand_dir }}/"
+    owner: root
+    group: root
+    mode: preserve
+  loop:
+    - service
+    - deploy
+
+- name: Положить .env для compose
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ stand_dir }}/deploy/.env"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Поднять стенд
+  community.docker.docker_compose_v2:
+    project_src: "{{ stand_dir }}/deploy"
+    build: policy
+    state: present
+    wait: true
+    wait_timeout: 180
+
+- name: Дождаться живости сервиса
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/healthz
+    status_code: 200
+  register: health
+  until: health.status == 200
+  retries: 20
+  delay: 3
+  changed_when: false

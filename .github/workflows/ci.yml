@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: тесты сервиса
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r service/requirements-dev.txt
+      - run: python -m pytest tests -q
+        working-directory: service
+
+  tests-in-container:
+    name: тесты в контейнере инструментов
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Проверяем тот путь, которым пойдёт человек без локального Python.
+      - run: docker compose --profile tools run --rm tests
+        working-directory: deploy
+
+  rules:
+    name: правила алертов
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Правила алертов — тоже код, и сломанное правило не падает,
+      # а молчит. Проверяем их тем же контейнером, что и локально,
+      # чтобы CI и машина разработчика не разъезжались.
+      - name: promtool check + test
+        run: docker compose --profile tools run --rm check-rules
+        working-directory: deploy
+
+  compose:
+    name: сборка и подъём стенда
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: валидация compose
+        run: docker compose -f deploy/docker-compose.yml config -q
+      # Главная проверка портируемости: стенд поднимается на чистой
+      # машине, где до этого не было ничего.
+      - name: поднять стенд и дождаться готовности
+        run: docker compose -f deploy/docker-compose.yml up -d --build --wait
+      - name: проверить, что сервис отвечает
+        run: |
+          curl -fsS localhost:8000/healthz
+          curl -fsS localhost:8000/work
+      - name: проверить, что Prometheus видит цель
+        run: |
+          for i in $(seq 1 30); do
+            up=$(curl -fsS 'localhost:9090/api/v1/query?query=up{job="stand"}' \
+                 | grep -o '"value":\[[^]]*,"1"\]' || true)
+            if [ -n "$up" ]; then echo "цель собирается"; exit 0; fi
+            sleep 2
+          done
+          echo "Prometheus не собрал метрики стенда"; exit 1
+      - name: логи при падении
+        if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs
+      - name: погасить
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v
+
+  ansible:
+    name: проверка плейбука
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ansible-core ansible-lint
+      - run: ansible-galaxy collection install -r requirements.yml
+        working-directory: ansible
+      - run: ansible-playbook site.yml --syntax-check
+        working-directory: ansible
+      - run: ansible-lint site.yml
+        working-directory: ansible
+        continue-on-error: true

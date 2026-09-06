@@ -1,0 +1,5 @@
+# Единые переводы строк: без этого правки с Windows приезжают в CRLF
+# и ломают shell-скрипты и сравнение диффов.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

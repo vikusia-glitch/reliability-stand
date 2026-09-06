@@ -1,0 +1,159 @@
+# Правила SLO для стенда надёжности.
+#
+# Цели (см. SLO.md):
+#   доступность — 99% успешных ответов /work за 7 дней
+#   задержка    — 99% ответов /work быстрее 300 мс за 7 дней
+# Бюджет ошибок в обоих случаях — 1% (0.01).
+#
+# Алерты стоят не на факте ошибки, а на скорости сгорания бюджета
+# (burn rate) в двух окнах сразу: длинное окно решает, что проблема
+# настоящая, короткое — что она всё ещё идёт. Одно длинное окно
+# держало бы алерт зажжённым часами после починки; одно короткое
+# срабатывало бы на любой единичный всплеск.
+
+groups:
+  - name: stand-sli
+    interval: 15s
+    rules:
+      # --- доля ошибок на /work по окнам ---
+      - record: stand:errors:ratio_rate5m
+        expr: |
+          sum(rate(stand_requests_total{endpoint="/work",code=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(stand_requests_total{endpoint="/work"}[5m])), 0.001)
+
+      - record: stand:errors:ratio_rate30m
+        expr: |
+          sum(rate(stand_requests_total{endpoint="/work",code=~"5.."}[30m]))
+          /
+          clamp_min(sum(rate(stand_requests_total{endpoint="/work"}[30m])), 0.001)
+
+      - record: stand:errors:ratio_rate1h
+        expr: |
+          sum(rate(stand_requests_total{endpoint="/work",code=~"5.."}[1h]))
+          /
+          clamp_min(sum(rate(stand_requests_total{endpoint="/work"}[1h])), 0.001)
+
+      - record: stand:errors:ratio_rate2h
+        expr: |
+          sum(rate(stand_requests_total{endpoint="/work",code=~"5.."}[2h]))
+          /
+          clamp_min(sum(rate(stand_requests_total{endpoint="/work"}[2h])), 0.001)
+
+      - record: stand:errors:ratio_rate6h
+        expr: |
+          sum(rate(stand_requests_total{endpoint="/work",code=~"5.."}[6h]))
+          /
+          clamp_min(sum(rate(stand_requests_total{endpoint="/work"}[6h])), 0.001)
+
+      - record: stand:errors:ratio_rate1d
+        expr: |
+          sum(rate(stand_requests_total{endpoint="/work",code=~"5.."}[1d]))
+          /
+          clamp_min(sum(rate(stand_requests_total{endpoint="/work"}[1d])), 0.001)
+
+      # --- доля слишком медленных ответов (порог 300 мс) ---
+      - record: stand:latency_bad:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(stand_request_duration_seconds_bucket{endpoint="/work",le="0.3"}[5m]))
+            /
+            clamp_min(sum(rate(stand_request_duration_seconds_count{endpoint="/work"}[5m])), 0.001)
+          )
+
+      - record: stand:latency_bad:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(stand_request_duration_seconds_bucket{endpoint="/work",le="0.3"}[1h]))
+            /
+            clamp_min(sum(rate(stand_request_duration_seconds_count{endpoint="/work"}[1h])), 0.001)
+          )
+
+      - record: stand:latency_bad:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(stand_request_duration_seconds_bucket{endpoint="/work",le="0.3"}[30m]))
+            /
+            clamp_min(sum(rate(stand_request_duration_seconds_count{endpoint="/work"}[30m])), 0.001)
+          )
+
+      - record: stand:latency_bad:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(stand_request_duration_seconds_bucket{endpoint="/work",le="0.3"}[6h]))
+            /
+            clamp_min(sum(rate(stand_request_duration_seconds_count{endpoint="/work"}[6h])), 0.001)
+          )
+
+      # --- остаток бюджета ошибок, проценты ---
+      # Демо-окно 6 часов: на свежем стенде семидневного окна ещё нет.
+      - record: stand:error_budget_left:ratio6h
+        expr: clamp_min(1 - (stand:errors:ratio_rate6h / 0.01), -1)
+
+  - name: stand-slo-alerts
+    rules:
+      # Порог 14.4x: при такой скорости недельный бюджет кончится за ~2 дня.
+      - alert: StandErrorBudgetFastBurn
+        expr: |
+          stand:errors:ratio_rate1h > (14.4 * 0.01)
+          and
+          stand:errors:ratio_rate5m > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "Быстрое сгорание бюджета ошибок на /work"
+          runbook: "runbooks/error-budget-fast-burn.md"
+
+      # Порог 6x: деградация идёт часами, за ночь съест заметную часть бюджета.
+      - alert: StandErrorBudgetSlowBurn
+        expr: |
+          stand:errors:ratio_rate6h > (6 * 0.01)
+          and
+          stand:errors:ratio_rate30m > (6 * 0.01)
+        for: 15m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "Медленное сгорание бюджета ошибок на /work"
+          runbook: "runbooks/error-budget-slow-burn.md"
+
+      # Порог 3x: не будить, разобрать в рабочее время.
+      - alert: StandErrorBudgetTicketBurn
+        expr: |
+          stand:errors:ratio_rate1d > (3 * 0.01)
+          and
+          stand:errors:ratio_rate2h > (3 * 0.01)
+        for: 1h
+        labels:
+          severity: ticket
+          slo: availability
+        annotations:
+          summary: "Фоновое сгорание бюджета ошибок на /work"
+          runbook: "runbooks/error-budget-slow-burn.md"
+
+      - alert: StandLatencyBudgetFastBurn
+        expr: |
+          stand:latency_bad:ratio_rate1h > (14.4 * 0.01)
+          and
+          stand:latency_bad:ratio_rate5m > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          slo: latency
+        annotations:
+          summary: "Слишком много ответов /work медленнее 300 мс"
+          runbook: "runbooks/latency-budget-burn.md"
+
+      # Единственный алерт по причине, а не по симптому: без метрик
+      # все остальные правила молчат, и тишина выглядит как здоровье.
+      - alert: StandDown
+        expr: up{job="stand"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Prometheus не собирает метрики со стенда"
+          runbook: "runbooks/stand-down.md"

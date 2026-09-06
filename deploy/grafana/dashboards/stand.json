@@ -1,0 +1,189 @@
+{
+  "uid": "stand-slo",
+  "title": "Стенд надёжности — SLO",
+  "tags": ["sre", "slo"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Бюджет ошибок",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Остаток бюджета ошибок (окно 6 ч)",
+      "description": "100% — бюджет цел. Ниже нуля — SLO нарушено, релизы стоит остановить.",
+      "datasource": { "type": "prometheus", "uid": "stand-prom" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": -1,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.25 },
+              { "color": "green", "value": 0.5 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "stand:error_budget_left:ratio6h",
+          "legendFormat": "остаток"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Скорость сгорания бюджета (burn rate)",
+      "description": "1x — бюджет расходуется ровно по плану. 14.4x — недельный бюджет закончится за двое суток.",
+      "datasource": { "type": "prometheus", "uid": "stand-prom" },
+      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5 }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "stand:errors:ratio_rate5m / 0.01",
+          "legendFormat": "5 мин"
+        },
+        {
+          "refId": "B",
+          "expr": "stand:errors:ratio_rate1h / 0.01",
+          "legendFormat": "1 час"
+        },
+        {
+          "refId": "C",
+          "expr": "vector(14.4)",
+          "legendFormat": "порог быстрого сгорания"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Четыре золотых сигнала",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Трафик — запросов в секунду",
+      "datasource": { "type": "prometheus", "uid": "stand-prom" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (code) (rate(stand_requests_total{endpoint=\"/work\"}[1m]))",
+          "legendFormat": "код {{code}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ошибки — доля 5xx",
+      "datasource": { "type": "prometheus", "uid": "stand-prom" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "stand:errors:ratio_rate5m",
+          "legendFormat": "доля ошибок, 5 мин"
+        },
+        {
+          "refId": "B",
+          "expr": "vector(0.01)",
+          "legendFormat": "цель SLO 1%"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Задержка — перцентили",
+      "description": "Порог SLI по задержке — 300 мс.",
+      "datasource": { "type": "prometheus", "uid": "stand-prom" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 15 },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(stand_request_duration_seconds_bucket{endpoint=\"/work\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(stand_request_duration_seconds_bucket{endpoint=\"/work\"}[5m])))",
+          "legendFormat": "p99"
+        },
+        {
+          "refId": "C",
+          "expr": "vector(0.3)",
+          "legendFormat": "порог 300 мс"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Насыщение — запросов в обработке",
+      "datasource": { "type": "prometheus", "uid": "stand-prom" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 15 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "stand_inflight_requests",
+          "legendFormat": "в обработке"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Заданная неисправность",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Что выкручено на стенде",
+      "description": "Видно, что авария вызвана намеренно и когда именно.",
+      "datasource": { "type": "prometheus", "uid": "stand-prom" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 23 },
+      "fieldConfig": { "defaults": { "min": 0 } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "stand_fault_error_rate",
+          "legendFormat": "доля ошибок"
+        },
+        {
+          "refId": "B",
+          "expr": "stand_fault_extra_latency_seconds",
+          "legendFormat": "добавочная задержка, с"
+        }
+      ]
+    }
+  ]
+}
