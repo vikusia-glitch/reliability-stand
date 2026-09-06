@@ -57,7 +57,8 @@ jobs:
       - name: проверить, что Prometheus видит цель
         run: |
           for i in $(seq 1 30); do
-            up=$(curl -fsS 'localhost:9090/api/v1/query?query=up{job="stand"}' \
+            up=$(curl -fsS --get localhost:9090/api/v1/query \
+                 --data-urlencode 'query=up{job="stand"}' \
                  | grep -o '"value":\[[^]]*,"1"\]' || true)
             if [ -n "$up" ]; then echo "цель собирается"; exit 0; fi
             sleep 2
